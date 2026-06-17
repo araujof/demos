@@ -1,4 +1,10 @@
-# CPEX runtime config for the HR demo.
+# CPEX runtime config for the HR demo — CEL variant.
+#
+# Identical to cpex.yaml EXCEPT the PDP backend for the search_repos
+# route: this config uses CEL (Common Expression Language) instead of
+# Cedar. Both express the same decision ("engineers read internal repos;
+# security reads any") — see cpex.yaml for the Cedar form. Run this
+# variant with:  GATEWAY_CONFIG=praxis-cel.yaml ./restart.sh
 #
 # Hot path:
 #   1. jwt-user      validates X-User-Token against Keycloak (cpex-demo realm)
@@ -173,47 +179,26 @@ global:
     - jwt-client
 
   # ----------------------------------------------------------------
-  # Cedar PDP — declarative authorization for relationship-based
-  # decisions. The Cedar policies live inline below. APL routes
-  # call into Cedar via `cedar:` steps and translate decisions
-  # into allow/deny in the broader policy pipeline.
+  # CEL PDP — inline boolean predicates as the decision backend.
+  # APL routes call into CEL via `cel:` steps; the expression
+  # evaluates against the common attribute vocabulary (subject.*,
+  # role.*, args.*, delegation.*, session.*) and returns a boolean:
+  # true → allow, false (or any eval error) → fail-closed deny.
   #
-  # Why Cedar here: pure APL predicates like `require(role.engineer)`
-  # are great for flat principal attributes. Cedar shines when the
-  # decision needs to relate principal attributes to resource
-  # attributes (e.g. "engineers can read repos when the repo's
-  # visibility is internal"). The two compose naturally — APL handles
-  # the orchestration around Cedar's discrete decisions.
+  # CEL vs Cedar (see cpex.yaml for the Cedar form): reach for CEL
+  # when the decision is a self-contained boolean predicate authored
+  # inline in the route — no external policy store, zero glue. Reach
+  # for Cedar when policy lives outside the route (versioned/signed
+  # policy sets) or needs the full entity/relationship model. Here
+  # both express the SAME decision so the two are directly comparable.
+  #
+  # NOTE: this config omits the `apl:` wrapper — APL terms (`pdp:` here,
+  # `policy:`/`args:`/`result:` on the routes below) sit directly on the
+  # section. cpex accepts both forms; see cpex.yaml for the wrapped style.
   # ----------------------------------------------------------------
   pdp:
-    - kind: cedar-direct
-      dialect: cedar
-      policy_text: |
-        // Engineers can read INTERNAL repos. The relationship
-        // (principal's role x resource's visibility) is the
-        // archetypal Cedar shape.
-        @id("engineering-internal-repos")
-        permit(
-          principal,
-          action == Action::"read",
-          resource is Repo
-        ) when {
-          principal.roles.contains("engineer") &&
-          resource.visibility == "internal"
-        };
-
-        // Security team can read ANY repo regardless of visibility.
-        @id("security-team-any-repo")
-        permit(
-          principal,
-          action == Action::"read",
-          resource is Repo
-        ) when {
-          principal.roles.contains("security")
-        };
-
-        // Default-deny otherwise. Cedar's defaults make this
-        // implicit but spelling it out documents intent.
+    - kind: cel
+      on_error: deny   # fail-closed; the default, spelled out
 
 routes:
   # ----------------------------------------------------------------
@@ -228,7 +213,7 @@ routes:
       # Taint the session: reading compensation marks this session as
       # having touched secret data. The label persists in the CPEX
       # session store (keyed by H(subject : X-Session-Id)) and is
-      # checked later by send_email, a cross-tool, cross-request
+      # checked later by send_email — a cross-tool, cross-request
       # data-flow control. See scenarios 08 / 09.
       - "taint(secret, session)"
       # Emit a structured audit record AFTER the policy + delegate
@@ -236,7 +221,7 @@ routes:
       - "run(audit-log)"
     args:
       # `redact(!perm.view_ssn)` fires when the caller LACKS the
-      # permission. The arg key remains, value becomes "[REDACTED]";
+      # permission. The arg key remains, value becomes "[REDACTED]" —
       # downstream tool can see "ssn was here but you can't read it."
       ssn: "str | redact(!perm.view_ssn)"
     result:
@@ -244,23 +229,22 @@ routes:
       # the SSN in its result (it does, when include_ssn=true);
       # without this rule, a caller with role.hr but NOT
       # perm.view_ssn (e.g. eve) would receive it. Redacting on the
-      # response closes the loop. The LLM-driven flow doesn't even
+      # response closes the loop — the LLM-driven flow doesn't even
       # require the caller to mention `ssn` in args for the guard
       # to fire, because the SSN comes back unsolicited in the
       # upstream tool's response.
       ssn: "str | redact(!perm.view_ssn)"
 
   # ----------------------------------------------------------------
-  # GITHUB FLOW — Pattern 3 (IdP per-audience mapping + Cedar PDP).
+  # GITHUB FLOW — Pattern 3 (IdP per-audience mapping + CEL PDP).
   #
   # Four authorization layers in one route:
   #
   #   1. APL gate     — cheap predicate. Short-circuits requests
   #                     from users who can't ever read repos.
-  #   2. Cedar PDP    — relationship between principal role and
-  #                     resource attributes (repo visibility).
-  #                     This is what pure flat predicates struggle
-  #                     with and what Cedar shines at.
+  #   2. CEL PDP      — inline boolean over subject roles and the
+  #                     requested repo's visibility. The CEL form of
+  #                     the Cedar relationship rule in cpex.yaml.
   #   3. Delegation   — RFC 8693 to github-api audience. Keycloak's
   #                     per-audience mapper injects gh_permissions
   #                     into the `permissions` claim.
@@ -270,26 +254,33 @@ routes:
   # ----------------------------------------------------------------
   - tool: search_repos
     policy:
-      # Layer 1: coarse APL gate on group membership.
+      # Layer 1 — coarse APL gate on group membership.
       - "require(team.engineering | team.security)"
 
-      # Layer 2: Cedar fine-grained authorization. The resource
-      # type+id come from the tool args; the principal is built
-      # from the user's token automatically (subject + roles).
-      - cedar:
-          action: 'Action::"read"'
-          resource:
-            type: Repo
-            id: ${args.repo_name}
-            attributes:
-              visibility: ${args.visibility}
+      # Layer 2 — CEL fine-grained authorization. `subject.roles`
+      # is the principal's role list; `args.visibility` is the
+      # requested repo's visibility (lifted from the tool args).
+      # Engineers may read internal repos; security may read any.
+      - cel:
+          expr: |
+            (has(role.engineer) && role.engineer && args.visibility == "internal")
+            || (has(role.security) && role.security)
+          # on_deny reactions run when the expression is false. Without
+          # this block the PDP still fail-closes (violation `cel`), just
+          # like the Cedar step's `cedar.default_deny`; here we attach a
+          # clearer reason so the client sees WHY. NOTE the quoting: the
+          # whole reaction is a double-quoted YAML scalar (so the `;` and
+          # spaces stay in one string) and the reason is single-quoted
+          # per the APL DSL — `deny('reason')` / `deny('reason', 'code')`.
+          on_deny:
+            - "deny('engineering may read internal repos only; security may read any', 'cel.policy_denied')"
 
-      # Layer 3: Token exchange. Keycloak's github-api mapper
+      # Layer 3 — Token exchange. Keycloak's github-api mapper
       # injects the user's gh_permissions as the `permissions`
       # claim on the minted token.
       - "delegate(github-oauth, target: github-api, audience: github-api, permissions: [repo:read:internal])"
 
-      # Layer 4: Verify the IdP granted enough. If the user's
+      # Layer 4 — Verify the IdP granted enough. If the user's
       # gh_permissions attribute didn't include repo:read:internal,
       # the minted token comes back narrower than asked. Deny here
       # rather than forwarding an insufficient token.
@@ -314,7 +305,7 @@ routes:
       # step that denies short-circuits the chain, so any step after
       # the deny never runs. Placing the observation first guarantees
       # the attempt is recorded even though the very next step is
-      # about to block it. A denied data-exfiltration attempt is
+      # about to block it — a denied data-exfiltration attempt is
       # precisely what a security audit trail must capture. audit-log
       # is observation-only (it cannot allow or deny), so running it
       # first never changes the verdict; the emitted record carries
@@ -325,8 +316,8 @@ routes:
       - "run(pii-scan)"
       # Session-taint gate: block email from a session that previously
       # accessed secret data (get_compensation runs taint(secret,
-      # session)). Distinct from pii-scan above; that catches PII in
-      # the body, this denies even a CLEAN body because the session
+      # session)). Distinct from pii-scan above — that catches PII in
+      # the body; this denies even a CLEAN body because the *session*
       # is tainted. The label is read from `security.labels`, hydrated
       # from the session store on this request. See scenarios 08 / 09.
       - "security.labels contains \"secret\": deny('external email blocked: this session accessed secret data', 'session_tainted_secret')"

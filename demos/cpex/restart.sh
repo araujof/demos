@@ -26,7 +26,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-GATEWAY_CONFIG="praxis.yaml"
+# Which praxis config to run. Defaults to the Cedar demo (praxis.yaml);
+# set GATEWAY_CONFIG=praxis-cel.yaml to run the CEL-PDP variant.
+GATEWAY_CONFIG="${GATEWAY_CONFIG:-praxis.yaml}"
 GATEWAY_LOG="gateway.log"
 KEYCLOAK_HOST="${KEYCLOAK_HOST:-http://localhost:8081}"
 KEYCLOAK_REALM="${KEYCLOAK_REALM:-cpex-demo}"

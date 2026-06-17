@@ -32,10 +32,20 @@ _print_response() {
 
 _post_tool() {
   local user_token="$1" client_token="$2" body="$3"
+  # Thread a CPEX session id when SESSION_ID is set: it lands in the
+  # X-Session-Id header, which the praxis cpex filter maps to
+  # agent.session_id so session-scoped taint labels persist across
+  # separate tool calls in the same logical session. The cpex session
+  # store binds it to the resolved subject (H(subject : session_id)),
+  # so the same id under a different user is a different bucket. Unset
+  # → no header → unchanged behavior.
+  local extra=()
+  [ -n "${SESSION_ID:-}" ] && extra+=(-H "X-Session-Id: $SESSION_ID")
   curl -isS --max-time 10 -X POST "$GATEWAY/mcp" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $client_token" \
     -H "X-User-Token: $user_token" \
+    ${extra[@]+"${extra[@]}"} \
     --data "$body"
 }
 
@@ -57,6 +67,32 @@ call_get_compensation() {
       "employee_id": "$employee_id",
       "include_ssn": $include_ssn,
       "ssn": "would-be-removed-if-redact-fires"
+    }
+  }
+}
+EOF
+  )
+  _print_response "$(_post_tool "$user_token" "$client_token" "$body")"
+}
+
+call_send_email() {
+  local user_token="$1"
+  local client_token="$2"
+  local email_body="${3:-Quarterly planning notes — nothing sensitive here.}"
+  local to="${4:-partner@example.com}"
+
+  local body
+  body=$(cat <<EOF
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "send_email",
+    "arguments": {
+      "to": "$to",
+      "subject": "FYI",
+      "body": "$email_body"
     }
   }
 }
