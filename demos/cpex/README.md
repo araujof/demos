@@ -53,6 +53,8 @@ minted, audience-scoped token, never his original IdP JWT.
 |              / workday-api / github-api clients; STE v2           |
 |   hr-mcp     mock MCP server: get_compensation, send_email,       |
 |              search_repos                                         |
+|   valkey     :6379, CPEX session store: taint labels keyed by     |
+|              H(subject:session_id), durable across gateway restart |
 +------------------------------------------------------------------+
 ```
 
@@ -60,7 +62,7 @@ minted, audience-scoped token, never his original IdP JWT.
 
 - Docker daemon running (Docker Desktop, Rancher Desktop, or Colima)
 - Rust toolchain (whatever praxis's `rust-version` requires)
-- Ports `8081`, `8090`, `9100` free on localhost
+- Ports `8081`, `8090`, `9100`, `6379` free on localhost
 
 ## Quick start
 
@@ -77,7 +79,7 @@ The equivalent steps, spelled out:
 
 ```bash
 GATEWAY_BIN="$(./build-praxis.sh)"   # build the cpex gateway, print its path
-docker compose up -d                 # Keycloak + mock MCP server
+docker compose up -d                 # Keycloak + mock MCP server + valkey
 ./verify-token-exchange.sh           # wait for the realm import, check STE v2
 "$GATEWAY_BIN" -c ./praxis.yaml &     # start the gateway
 ./walkthrough.sh                     # narrated tour of the core scenarios
@@ -184,9 +186,34 @@ not the content, which is what separates it from scenario 07's content-based PII
 deny. Scenario 09 shows the taint cannot cross principals.
 
 Tainting is independent of the PDP, so 08 and 09 behave the same under both
-`cpex.yaml` and `cpex-cel.yaml`. The session store is in-memory and per process:
-taint resets when the gateway restarts, and the scenarios use fresh per-run
-session ids so reruns start clean.
+`cpex.yaml` and `cpex-cel.yaml`.
+
+### Where taint is stored
+
+Both configs point `global.session_store` at Valkey:
+
+```yaml
+global:
+  session_store:
+    kind: valkey
+    endpoint: localhost:6379
+```
+
+So labels live in the `valkey` container (keys under the `taint:v1` prefix),
+not in the gateway process. Taint survives a gateway restart and can be shared
+across gateway instances. Inspect or clear it directly:
+
+```bash
+docker compose exec valkey valkey-cli keys 'taint:v1:*'   # one key per tainted session
+docker compose exec valkey valkey-cli flushall            # clear all taint
+```
+
+To see persistence across a restart: run scenario 08 step 2 (the
+`get_compensation` that taints), restart only the gateway (do not run
+`restart.sh`, which wipes the containers), then send the step-3 `send_email` on
+the same session id. It is still denied. Drop the `session_store` block to fall
+back to the in-process store, which resets on restart. The scenarios use fresh
+per-run session ids either way, so reruns start clean.
 
 ## Notes
 
@@ -208,7 +235,7 @@ the padding, so the wire stays correct. This is documented in the filter source.
 | `cpex.yaml` | CPEX policy: plugins, routes, Cedar PDP policy text |
 | `praxis-cel.yaml` | Same listener as `praxis.yaml`, loads `cpex-cel.yaml`. Run via `GATEWAY_CONFIG=praxis-cel.yaml` |
 | `cpex-cel.yaml` | CEL variant: `search_repos` uses an inline `cel:` expression, no `apl:` wrapper |
-| `docker-compose.yml` | Keycloak (8081) and hr-mcp (9100) |
+| `docker-compose.yml` | Keycloak (8081), hr-mcp (9100), and valkey (6379) |
 | `keycloak/realm-export.json` | Realm with users, clients, and STE v2 |
 | `hr-mcp-server/` | Python mock MCP server (Dockerfile and `server.py`) |
 | `scenarios/*.sh` | The nine scenarios (including 08 and 09 session taint) and `_lib.sh` helpers |
