@@ -1,7 +1,13 @@
 # CPEX HR Demo
 
-End-to-end demo of **Praxis** with the feature-gated **`cpex`** filter,
-**Keycloak** as the OIDC IdP, and a mock **MCP server**. It exercises the full
+An agent that can call tools can also leak data, exceed a user's privileges, or
+act on a credential it should never hold. This demo puts **Praxis** between the
+agent and its tools as an identity-aware control point. One policy layer decides
+who can call what, what data comes back, and where that data is allowed to go
+next.
+
+It is an end-to-end setup of **Praxis** with the feature-gated **`cpex`** filter,
+**Keycloak** as the OIDC IdP, and a mock **MCP server**, exercising the full
 CPEX/APL (Authorization Policy Logic) stack:
 
 - multi-source identity (user, agent, and workload JWTs in separate headers,
@@ -14,9 +20,15 @@ CPEX/APL (Authorization Policy Logic) stack:
 - structured audit emission
 - session taint (cross-tool, cross-request data-flow control)
 
-## The story
+## Scenario
 
-Three personas carry it:
+<p align="center">
+  <img src="docs/figures/demo_scenario.png" alt="Demo scenario">
+</p>
+
+A single agent serves three people and reaches three backends over the Model
+Context Protocol: HR records, code repositories, and email. Everyone talks to the
+same agent, and the agent calls the same tools. Identity decides the outcome.
 
 | Persona | Identity | Result |
 |---|---|---|
@@ -24,12 +36,34 @@ Three personas carry it:
 | Eve | HR, no `view_ssn` | Same record, SSN redacted |
 | Alice | Engineering | Denied HR tools; allowed internal repos, denied external |
 
-Bob and Eve send the byte-for-byte same `get_compensation` request and the
-backend returns the same record, but Eve's response comes back without the SSN
-because the policy redacts it. Bob's request reaches the backend with a freshly
-minted, audience-scoped token, never his original IdP JWT.
+Two outcomes make the value concrete:
 
-## What runs where
+- **Same request, different data.** Bob and Eve send the byte-for-byte same
+  `get_compensation` request and the backend returns the same record. Eve's
+  response comes back without the SSN because the policy redacts it on the wire.
+  The tool never makes that call; Praxis does. Bob's request reaches the backend
+  with a freshly minted, audience-scoped token, never his original IdP JWT.
+- **Data flow follows the conversation.** Once a session has touched compensation
+  data, Praxis stops that session from sending external email, even when the email
+  body is clean. The taint travels with the session, not the message.
+
+## Architecture
+
+<p align="center">
+  <img src="docs/figures/demo_arch.png" alt="Demo architecture" width="65%">
+</p>
+
+The agent never talks to a tool directly. Every call passes through Praxis, which
+authenticates the caller against Keycloak, runs the policy, and only then forwards
+a scoped request to the MCP tool. In a single pass it:
+
+- resolves identity from the user, agent, and workload tokens
+- runs the APL gate and a PDP (Cedar or CEL) for relationship-based decisions
+- exchanges the user token for an audience-scoped backend token (RFC 8693)
+- redacts sensitive fields and scans arguments for PII
+- tracks session taint and emits a structured audit record
+
+### What runs where
 
 ```text
 +------------------------------------------------------------------+
@@ -152,7 +186,7 @@ Both PDP backends are compiled into the same binary. The config's
 runs. The CEL step also shows an `on_deny:` reaction attaching a human reason and
 a stable violation code; `on_deny` and `on_allow` work on any PDP step.
 
-## Session taint (scenarios 08 and 09)
+## Session taint
 
 `get_compensation` runs `taint(secret, session)`, attaching the label `secret` to
 the session. `send_email` then refuses to send when the session carries it:
@@ -254,4 +288,4 @@ behind the `cpex` Cargo feature on `praxis-proxy-filter`. That feature registers
 both the Cedar (`apl-pdp-cedar-direct`) and CEL (`apl-pdp-cel`) PDP backends, so
 one binary serves both `cpex.yaml` and `cpex-cel.yaml`. See the filter's own
 README there for configuration and internals.
-```
+
