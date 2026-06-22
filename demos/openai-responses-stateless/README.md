@@ -1,5 +1,7 @@
 # OpenAI Responses API — Stateless Passthrough
 
+[![asciicast](https://asciinema.org/a/qKPCNIAZjOVm9Fyu.svg)](https://asciinema.org/a/qKPCNIAZjOVm9Fyu)
+
 A minimal demo of **Praxis** proxying OpenAI `/v1/responses` requests with
 `store: false` to a vLLM backend. The request is classified, routed, and
 forwarded unchanged — sub-millisecond overhead, no buffering, no persistence,
