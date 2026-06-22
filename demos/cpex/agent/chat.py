@@ -75,7 +75,7 @@ from rich.panel import Panel
 # Defaults
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "ollama/llama3:latest"  # local, no API key required
+DEFAULT_MODEL = "ollama/qwen3:8b"  # local, no API key required
 DEFAULT_GATEWAY = "http://localhost:8090/mcp"
 DEFAULT_KEYCLOAK = "http://localhost:8081"
 KEYCLOAK_REALM = "cpex-demo"
