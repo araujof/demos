@@ -1,0 +1,37 @@
+# Baseline gateway for the CPEX benchmark — IDENTICAL to praxis.yaml
+# but with the `cpex` filter REMOVED from the chain. The `mcp` filter
+# stays so JSON-RPC parsing parity holds; only the policy layer is gone.
+#
+# Run the same scenario bodies through this and through praxis.yaml; the
+# latency / throughput delta is the total cost of the CPEX filter (the
+# price of the policy layer). Combined with cpex-nodelegate (no live
+# token exchange), it separates filter compute from IdP-network cost.
+#
+#   GATEWAY_CONFIG=praxis-baseline.yaml ./restart.sh
+# or, against the running stack:
+#   praxis -c praxis-baseline.yaml
+
+listeners:
+  - name: gateway
+    address: "127.0.0.1:8090"
+    protocol: http
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: mcp
+        # Same as praxis.yaml — parse the JSON-RPC envelope so the
+        # request path is byte-for-byte comparable; just no policy.
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: hr-mcp-backend
+
+      - filter: load_balancer
+        clusters:
+          - name: hr-mcp-backend
+            endpoints:
+              - "127.0.0.1:9100"

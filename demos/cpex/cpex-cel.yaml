@@ -23,6 +23,9 @@
 
 plugin_settings:
   routing_enabled: true
+  # Capture per-plugin / per-PDP wall-clock timing into the pipeline
+  # result for the benchmark harness. Off in production.
+  capture_timings: true
 
 plugins:
   # User identity. Carries the human's roles + permissions claims.
