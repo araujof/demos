@@ -14,6 +14,7 @@ Each demo lives under `demos/<name>/` with its own README and bring-up script.
 | [openai-responses-multi-turn](demos/openai-responses-multi-turn/) | Multi-turn conversation (non-streaming) for the OpenAI Responses API. Praxis stores turn 1 in SQLite, then rehydrates the conversation history on turn 2 via `previous_response_id` and rebuilds the request body before forwarding to vLLM. |
 | [openai-responses-streaming-multi-turn](demos/openai-responses-streaming-multi-turn/) | Streaming multi-turn with `previous_response_id`. Turn 1 non-streaming stored in SQLite, turn 2 streaming with rehydrated history — SSE events accumulated by `openai_stream_events` and persisted at end-of-stream. |
 | [openai-conversations](demos/openai-conversations/) | Full CRUD lifecycle for the OpenAI `/v1/conversations` API handled entirely locally by Praxis — create, retrieve, update, delete conversations and items, all backed by SQLite with no upstream traffic. |
+| [openai-conversations-multi-turn](demos/openai-conversations-multi-turn/) | Multi-turn via `conversation` field — create a conversation, reference it by ID on each turn. Praxis rehydrates stored items, forwards full context to vLLM, and auto-appends input+output back to the conversation. |
 
 ## Layout
 
