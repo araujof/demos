@@ -7,7 +7,7 @@ Use it to see how an existing Kuadrant `AuthPolicy` would look under Praxis + th
 ## What it shows
 
 - Kuadrant `AuthPolicy` (`kuadrant.io/v1`, Authorino `v1beta3`) parsed and mapped to CPEX's canonical policy form.
-- JWT authentication becomes a CPEX `identity/jwt` plugin; CEL authorization (`patternMatching` predicates, `when`, `patterns`, and the deprecated `selector`/`operator`/`value` form) becomes APL steps under the `global` policy's `authorization.pre_invocation` block.
+- JWT authentication becomes a CPEX `identity/jwt` plugin; CEL authorization (`patternMatching` predicates, `when`, `patterns`, and the deprecated `selector`/`operator`/`value` form) becomes `cel: { expr }` PDP steps under the `global` policy's `authorization.pre_invocation` block, gated by a native `require(authenticated)` presence check.
 - A coverage report that classifies every construct, so gaps are visible rather than silently dropped.
 - Fail-closed behaviour: if a policy declares authorization but nothing translates, the output is a `require(false)` deny-all and the CLI exits non-zero.
 
@@ -35,8 +35,11 @@ global:
     - keycloak-jwt
   authorization:
     pre_invocation:
-      - "require( ... )"
+      - "require(authenticated)"          # native presence gate
+      - cel: { expr: "<remapped CEL>" }   # one per Kuadrant rule
 ```
+
+Kuadrant `patternMatching`/`when` predicates are CEL, so each translated rule is emitted as a `cel: { expr }` PDP step — dispatched to CPEX's bundled `cel` resolver, which evaluates full CEL (`startsWith`, `&&`/`||`, literal `in`). The APL-native `require(...)` form is used only for the `require(authenticated)` presence gate and the `require(false)` fail-closed sentinel, because `require(...)` parses APL's own predicate DSL, not CEL.
 
 The coverage report summarises the mapping:
 
@@ -67,7 +70,7 @@ The transpiler covers the subset that maps cleanly to CEL. Everything else is re
 - **Response:** `denyWith` status, body, and headers translate. Success-response injection is best-effort and reported.
 - **Metadata and callbacks:** reported as gaps.
 - **Binding and lifecycle (out of scope):** no Gateway API translation (`targetRef` to listeners/routes), no CRD ingestion or operator, no reverse translation, no multi-version schema support.
-- **CEL emission caveat:** APL `require(...)` is truthiness-only. Comparisons emit the predicate:action form and CEL functions (`startsWith`, `matches`) belong in a `cel:` PDP step. Predicates using functions are flagged rather than emitted as an invalid `require(...)`.
+- **CEL namespaces:** predicates are lexically remapped from Kuadrant's vocabulary to CPEX's (`auth.identity.*` → `claim.*`, `request.*` → `http.*`). A reference that does not remap (e.g. `auth.metadata.*`) is reported as a gap and dropped rather than emitted as wrong-namespace CEL. Whether a given namespace (`claim.*` nested claims, `http.request_headers.*`) is populated in a given CPEX deployment is noted in the report.
 
 The emitted documents are checked by the golden corpus under `tests/` and the structural invariant assertions in `src/main.rs`. This demo depends only on `serde`, `serde_yaml`, and `clap`; it does not parse its output through the CPEX crate.
 

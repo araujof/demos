@@ -7,7 +7,14 @@
 //! Translation is best-effort but **fail-closed** (plan R19): if a policy
 //! declares authorization rules and none of them survive translation, the
 //! emitted CPEX policy gets a `require(false)` deny-all step and the report
-//! records a [`Severity::Fatal`] entry so the CLI exits non-zero. Kuadrant
+//! records a [`Severity::Fatal`] entry so the CLI exits non-zero.
+//!
+//! Kuadrant `patternMatching`/`when` predicates are CEL, so each translated
+//! rule is emitted as a `cel: { expr }` PDP step (dispatched to CPEX's
+//! bundled `cel` resolver — full CEL), not wrapped in `require(...)`, whose
+//! APL predicate DSL is a different, non-CEL language. The APL-native
+//! `require(...)` form is used only for the `require(authenticated)`
+//! presence gate and the `require(false)` fail-closed sentinel. Kuadrant
 //! evaluation semantics are preserved where expressible (R22): patterns are
 //! AND-combined, `any`/`all` map to `||`/`&&`, and per-rule `when` gates it.
 //! Identity/response/security posture follows R21 (explicit JWT algorithms,
@@ -20,8 +27,8 @@ use serde_yaml::Value;
 use super::{
     cel::{self, Remap},
     emit::{
-        AuthorizationOut, CpexDoc, DecodingKey, FilterBlock, GlobalOut, JwtConfig, PluginEntry,
-        PluginSettings, TrustedIssuer,
+        AuthorizationOut, CpexDoc, DecodingKey, FilterBlock, GlobalOut, JwtConfig, PdpEntry,
+        PluginEntry, PluginSettings, PolicyStep, TrustedIssuer,
     },
     model::{AuthPolicy, AuthScheme, AuthnMethod, AuthzMethod, PatternExpr, ResponseSpec, Spec},
     report::{Report, Severity},
@@ -66,9 +73,20 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
         report_metadata_callbacks(s, &mut report);
     }
 
-    // `spec.when` (policy activation) folds into each step: the flat `global`
-    // form has no route-level `when` gate, so a rule only denies when the
-    // activation condition holds.
+    // Prepend the native `require(authenticated)` presence gate when an
+    // identity is configured: a cheap APL attribute check that denies before
+    // any CEL PDP step runs if no verified subject resolved. (Identity itself
+    // also fails closed via the plugin's `on_error: fail`; this makes the
+    // policy's presence requirement explicit.) It is intentionally not gated
+    // by `spec.when` — presence is required whenever the policy is active.
+    let mut policy_steps = policy_steps;
+    if !authentication.is_empty() {
+        policy_steps.insert(0, PolicyStep::require_authenticated());
+    }
+
+    // `spec.when` (policy activation) folds into each CEL step: the flat
+    // `global` form has no route-level `when` gate, so a rule only denies
+    // when the activation condition holds.
     let when = top_level_when(&policy.spec, &mut report);
     let steps = gate_with_when(policy_steps, when.as_deref());
 
@@ -76,13 +94,24 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
     // `authentication:` + `authorization:` block form (no `apl:` wrapper) —
     // the designed home for catch-all, non-entity HTTP policies. CPEX
     // evaluates it for generic HTTP requests via the `cmf.http_request` hook.
+    // A `cel:` step needs the `cel` resolver declared into the policy's PDP
+    // router; without `pdp: [{ kind: cel }]` every `cel:` step fails closed
+    // (deny) at evaluation time. Emit the declaration whenever any step is a
+    // CEL step.
+    let pdp = if steps.iter().any(|s| matches!(s, PolicyStep::Cel { .. })) {
+        vec![PdpEntry::cel()]
+    } else {
+        Vec::new()
+    };
     let authorization = (!steps.is_empty()).then_some(AuthorizationOut {
         pre_invocation: steps,
     });
-    let global = (!authentication.is_empty() || authorization.is_some()).then_some(GlobalOut {
-        authentication,
-        authorization,
-    });
+    let global = (!authentication.is_empty() || authorization.is_some() || !pdp.is_empty())
+        .then_some(GlobalOut {
+            authentication,
+            authorization,
+            pdp,
+        });
 
     let doc = CpexDoc {
         plugin_settings: PluginSettings {
@@ -143,22 +172,19 @@ fn jwt_plugin_names(scheme: &AuthScheme) -> Vec<String> {
         .collect()
 }
 
-/// Fold `spec.when` into each authorization step so a rule only denies when
-/// the activation condition holds. The flat `global` policy has no route
-/// `when` gate, so it is expressed per step. The fail-closed sentinel
-/// (`require(false)`) is left untouched — it must deny regardless.
-fn gate_with_when(steps: Vec<String>, when: Option<&str>) -> Vec<String> {
+/// Fold `spec.when` into each CEL authorization step so a rule only denies
+/// when the activation condition holds. The flat `global` policy has no
+/// route `when` gate, so it is expressed per step. Only `cel:` steps are
+/// folded (the fold is CEL: `!(when) || (expr)`); the native `require(...)`
+/// steps — the presence gate and the fail-closed sentinel — are left
+/// untouched, since APL's `require` DSL is not CEL.
+fn gate_with_when(steps: Vec<PolicyStep>, when: Option<&str>) -> Vec<PolicyStep> {
     let Some(when) = when else { return steps };
     steps
         .into_iter()
-        .map(|s| {
-            if s == "require(false)" {
-                return s;
-            }
-            match s.strip_prefix("require(").and_then(|r| r.strip_suffix(')')) {
-                Some(expr) => format!("require(!({when}) || ({expr}))"),
-                None => s,
-            }
+        .map(|s| match s {
+            PolicyStep::Cel { cel } => PolicyStep::cel(format!("!({when}) || ({})", cel.expr)),
+            require @ PolicyStep::Require(_) => require,
         })
         .collect()
 }
@@ -253,9 +279,14 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
     plugins
 }
 
-/// Translate authorization rules into APL `require(...)` policy steps,
-/// failing closed if authz was declared but nothing translated (R19).
-fn translate_authz(policy: &AuthPolicy, scheme: &AuthScheme, report: &mut Report) -> Vec<String> {
+/// Translate authorization rules into `cel: { expr }` PDP steps, failing
+/// closed with `require(false)` if authz was declared but nothing translated
+/// (R19).
+fn translate_authz(
+    policy: &AuthPolicy,
+    scheme: &AuthScheme,
+    report: &mut Report,
+) -> Vec<PolicyStep> {
     // Pre-translate named patterns so `patternRef` can inline them.
     let named = translate_named_patterns(&policy.spec, report);
 
@@ -313,9 +344,9 @@ fn translate_authz(policy: &AuthPolicy, scheme: &AuthScheme, report: &mut Report
                     nested_claim_seen = true;
                 }
 
-                steps.push(format!("require({expr})"));
+                steps.push(PolicyStep::cel(expr));
                 if translated_ok {
-                    report.translated(&construct, "patternMatching → APL require(<CEL>).");
+                    report.translated(&construct, "patternMatching → CEL PDP step (`cel: { expr }`).");
                 } else {
                     report.approximated(
                         &construct,
@@ -357,7 +388,7 @@ fn translate_authz(policy: &AuthPolicy, scheme: &AuthScheme, report: &mut Report
             Severity::Fatal,
             "authorization rules were declared but none translated to an enforceable policy; emitting deny-all to avoid failing open.",
         );
-        steps.push("require(false)".to_owned());
+        steps.push(PolicyStep::deny_all());
     }
 
     steps
@@ -662,10 +693,25 @@ spec:
         assert!(t.cpex_doc.contains("kind: identity/jwt"));
         assert!(t.cpex_doc.contains("on_error: fail"));
         assert!(t.cpex_doc.contains("RS256"));
-        // CEL was remapped into CPEX namespaces.
+        // CEL was remapped into CPEX namespaces and emitted as a `cel:` step.
+        assert!(t.cpex_doc.contains("cel:"));
+        assert!(t.cpex_doc.contains("expr:"));
         assert!(t.cpex_doc.contains("claim.email_verified"));
-        assert!(t.cpex_doc.contains("http.method == 'GET'"));
-        assert!(t.cpex_doc.contains("require("));
+        // A `cel:` step requires the `cel` PDP resolver to be declared, or it
+        // fails closed at runtime.
+        assert!(t.cpex_doc.contains("pdp:"));
+        assert!(t.cpex_doc.contains("kind: cel"));
+        // Quote-agnostic: serde_yaml may single-quote the expr scalar
+        // (doubling inner quotes) depending on its leading character.
+        assert!(t.cpex_doc.contains("http.method =="));
+        // Presence gate is the native `require(authenticated)`; the CEL
+        // predicate is NOT wrapped in `require(...)`.
+        assert!(t.cpex_doc.contains("require(authenticated)"));
+        assert!(
+            !t.cpex_doc.contains("require(http.method"),
+            "comparisons belong in a cel: step, not require(...);\n{}",
+            t.cpex_doc
+        );
         assert!(!t.report.has_fatal());
     }
 
@@ -773,14 +819,21 @@ spec:
             - predicate: \"auth.identity.email_verified\"
 ",
         );
-        // spec.when folds into each pre_invocation require (no route `when:`
-        // field in the canonical global block).
+        // spec.when folds into each cel: step's expr (no route `when:` field
+        // in the canonical global block). No authn here, so no presence gate.
         assert!(t.cpex_doc.contains("pre_invocation:"));
-        assert!(t.cpex_doc.contains("http.host == 'api.example.com'"));
+        assert!(t.cpex_doc.contains("cel:"));
+        // Quote-agnostic anchors (serde_yaml single-quotes the `!(`-leading
+        // scalar, doubling inner quotes).
+        assert!(t.cpex_doc.contains("http.host =="));
         assert!(
+            t.cpex_doc.contains(")) || ((claim.email_verified))"),
+            "spec.when should gate the rule inside the cel: expr; got:\n{}",
             t.cpex_doc
-                .contains("require(!((http.host == 'api.example.com'))"),
-            "spec.when should gate the rule inside require(); got:\n{}",
+        );
+        assert!(
+            !t.cpex_doc.contains("require(authenticated)"),
+            "no identity configured → no presence gate;\n{}",
             t.cpex_doc
         );
     }

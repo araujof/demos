@@ -271,12 +271,31 @@ mod golden_tests {
         // jwt-rbac: JWT + CEL authz translate; not fail-closed.
         let rbac = transpile_fixture("jwt-rbac");
         assert!(rbac.cpex_doc.contains("kind: identity/jwt"));
-        assert!(
-            rbac.cpex_doc
-                .contains("'admin' in claim.realm_access.roles")
-        );
-        assert!(rbac.cpex_doc.contains("http.method == 'POST'"));
+        // Quote-agnostic: serde_yaml single-quotes the `!(`-leading cel expr
+        // scalar and doubles the inner quotes (`''admin''`).
+        assert!(rbac.cpex_doc.contains("in claim.realm_access.roles"));
+        assert!(rbac.cpex_doc.contains("http.method =="));
         assert!(!rbac.report.has_fatal(), "jwt-rbac should not fail closed");
+
+        // Kuadrant CEL predicates emit as `cel:` PDP steps, gated by a native
+        // `require(authenticated)` presence check — never `require(<CEL>)`.
+        assert!(
+            rbac.cpex_doc.contains("cel:"),
+            "authz predicates emit as cel: steps"
+        );
+        assert!(
+            rbac.cpex_doc.contains("kind: cel"),
+            "a cel: step must declare the cel PDP resolver or it fails closed at runtime"
+        );
+        assert!(
+            rbac.cpex_doc.contains("require(authenticated)"),
+            "JWT identity → require(authenticated) presence gate"
+        );
+        assert!(
+            !rbac.cpex_doc.contains("require(http.method") && !rbac.cpex_doc.contains("require((("),
+            "comparisons/CEL belong in cel: steps, not require(...);\n{}",
+            rbac.cpex_doc
+        );
 
         // Canonical CPEX block form: `authentication:` + `authorization:`
         // with `pre_invocation:`, never the legacy keys (which CPEX rejects).
@@ -310,11 +329,17 @@ mod golden_tests {
         let opa = transpile_fixture("apikey-opa");
         assert!(opa.report.has_fatal(), "OPA-only authz must fail closed");
         assert!(opa.cpex_doc.contains("require(false)"));
+        // Fail-closed uses a native require(false), not a cel: step, so no
+        // cel PDP resolver is declared.
+        assert!(
+            !opa.cpex_doc.contains("kind: cel"),
+            "fail-closed require(false) needs no cel resolver"
+        );
 
         // gateway-defaults: defaults block + jwksUrl jwt + email-verified authz.
         let gw = transpile_fixture("gateway-defaults");
         assert!(gw.cpex_doc.contains("kind: identity/jwt"));
-        assert!(gw.cpex_doc.contains("claim.email_verified == true"));
+        assert!(gw.cpex_doc.contains("claim.email_verified =="));
         assert!(
             gw.report
                 .entries

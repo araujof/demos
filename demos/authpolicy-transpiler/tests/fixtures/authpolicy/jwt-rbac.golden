@@ -23,8 +23,13 @@ global:
   - keycloak-jwt
   authorization:
     pre_invocation:
-    - require(!((!http.path.startsWith('/public'))) || (!((http.method == 'GET')) || ((('admin' in claim.realm_access.roles)) && (claim.email_verified))))
-    - require(!((!http.path.startsWith('/public'))) || (!(((http.method == 'POST') || (http.method == 'DELETE'))) || ((('admin' in claim.realm_access.roles)))))
+    - require(authenticated)
+    - cel:
+        expr: '!((!http.path.startsWith(''/public''))) || (!((http.method == ''GET'')) || (((''admin'' in claim.realm_access.roles)) && (claim.email_verified)))'
+    - cel:
+        expr: '!((!http.path.startsWith(''/public''))) || (!(((http.method == ''POST'') || (http.method == ''DELETE''))) || (((''admin'' in claim.realm_access.roles))))'
+  pdp:
+  - kind: cel
 
 # == Praxis filter block ==
 filter: policy
@@ -43,9 +48,9 @@ translated: 4   approximated: 4   skipped: 1
 [WARN ] approximated  authentication/keycloak-jwt
           issuerUrl maps to OIDC discovery, which CPEX identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.
 [INFO ] translated    authorization/members-can-read
-          patternMatching → APL require(<CEL>).
+          patternMatching → CEL PDP step (`cel: { expr }`).
 [INFO ] translated    authorization/writes-need-admin
-          patternMatching → APL require(<CEL>).
+          patternMatching → CEL PDP step (`cel: { expr }`).
 [WARN ] approximated  authentication (claims)
           a rule references a nested identity claim (e.g. Keycloak realm_access.roles); the `standard` claim mapper does not surface nested claims as usable keys (needs Phase B U14).
 [WARN ] approximated  response.unauthenticated

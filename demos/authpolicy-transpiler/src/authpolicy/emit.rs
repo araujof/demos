@@ -83,6 +83,28 @@ pub(crate) struct GlobalOut {
     pub authentication: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization: Option<AuthorizationOut>,
+    /// PDP resolver declarations. Emitted as `[{ kind: cel }]` whenever any
+    /// `cel:` step is produced: a `cel:` step needs the `cel` resolver
+    /// declared into the policy's PDP router, or it fails closed (deny) at
+    /// evaluation time. The CEL expression lives in the step, so the entry
+    /// just names the kind.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pdp: Vec<PdpEntry>,
+}
+
+/// One `global.pdp` entry — declares a PDP resolver by `kind`.
+#[derive(Debug, Serialize)]
+pub(crate) struct PdpEntry {
+    pub kind: String,
+}
+
+impl PdpEntry {
+    /// The bundled CEL resolver declaration (`- kind: cel`).
+    pub(crate) fn cel() -> Self {
+        Self {
+            kind: "cel".to_owned(),
+        }
+    }
 }
 
 /// The canonical `authorization:` block. `pre_invocation` is the renamed
@@ -90,7 +112,49 @@ pub(crate) struct GlobalOut {
 #[derive(Debug, Serialize)]
 pub(crate) struct AuthorizationOut {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub pre_invocation: Vec<String>,
+    pub pre_invocation: Vec<PolicyStep>,
+}
+
+/// One `pre_invocation` step. Kuadrant predicates are CEL, so they are
+/// emitted as `cel: { expr }` PDP steps (dispatched to CPEX's bundled `cel`
+/// resolver, which evaluates full CEL: `startsWith`, `&&`/`||`, literal
+/// `in`, …). The APL-native `require(...)` form is reserved for the two
+/// things that are genuinely native attribute predicates — the
+/// `require(authenticated)` presence gate and the `require(false)`
+/// fail-closed sentinel — because `require(...)` parses APL's own predicate
+/// DSL (`&`/`|`, key-in-key membership), not CEL.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(crate) enum PolicyStep {
+    /// A bare APL predicate rule, e.g. `require(authenticated)`.
+    Require(String),
+    /// A CEL PDP step: `cel: { expr: "..." }`.
+    Cel { cel: CelExpr },
+}
+
+/// The `expr:` payload of a `cel:` PDP step.
+#[derive(Debug, Serialize)]
+pub(crate) struct CelExpr {
+    pub expr: String,
+}
+
+impl PolicyStep {
+    /// The `require(authenticated)` native presence gate.
+    pub(crate) fn require_authenticated() -> Self {
+        Self::Require("require(authenticated)".to_owned())
+    }
+
+    /// The `require(false)` fail-closed deny-all sentinel.
+    pub(crate) fn deny_all() -> Self {
+        Self::Require("require(false)".to_owned())
+    }
+
+    /// A `cel: { expr }` PDP step wrapping a remapped CEL predicate.
+    pub(crate) fn cel(expr: String) -> Self {
+        Self::Cel {
+            cel: CelExpr { expr },
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
