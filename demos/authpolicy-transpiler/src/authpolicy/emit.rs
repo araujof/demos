@@ -162,10 +162,11 @@ impl PolicyStep {
 // ---------------------------------------------------------------------------
 
 /// The Praxis `policy` filter entry the operator adds to a filter chain.
+/// The filter derives its evaluation from the loaded policy: a `global`-only
+/// document (as emitted here) is authorized at the HTTP layer, so no
+/// enforcement-mode field is needed.
 #[derive(Debug, Serialize)]
 pub(crate) struct FilterBlock {
     pub filter: String,
     pub config_path: String,
-    /// Phase B experimental enforcement mode (plan R16/U5).
-    pub enforcement: String,
 }

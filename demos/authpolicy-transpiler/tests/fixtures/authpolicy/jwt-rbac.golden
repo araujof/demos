@@ -34,7 +34,6 @@ global:
 # == Praxis filter block ==
 filter: policy
 config_path: /etc/praxis/jwt-rbac-cpex-policy.yaml
-enforcement: http
 
 # == Coverage report ==
 AuthPolicy → Praxis coverage report

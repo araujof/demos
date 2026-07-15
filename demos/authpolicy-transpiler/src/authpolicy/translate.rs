@@ -124,7 +124,6 @@ pub(crate) fn transpile(policy: &AuthPolicy, slug: &str) -> Transpiled {
     let filter_block = FilterBlock {
         filter: "policy".to_owned(),
         config_path: format!("/etc/praxis/{slug}-cpex-policy.yaml"),
-        enforcement: "http".to_owned(),
     };
 
     Transpiled {
@@ -839,9 +838,12 @@ spec:
     }
 
     #[test]
-    fn filter_block_is_http_mode() {
+    fn filter_block_is_policy_filter() {
         let t = transpile_str("spec: {}");
         assert!(t.filter_block.contains("filter: policy"));
-        assert!(t.filter_block.contains("enforcement: http"));
+        assert!(t.filter_block.contains("config_path:"));
+        // No enforcement-mode field: the filter derives HTTP-layer
+        // authorization from the emitted `global`-only policy.
+        assert!(!t.filter_block.contains("enforcement"));
     }
 }
