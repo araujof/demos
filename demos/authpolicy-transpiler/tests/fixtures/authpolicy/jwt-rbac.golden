@@ -8,12 +8,12 @@ plugins:
   - identity.resolve
   on_error: fail
   config:
+    role: user
     header: Authorization
     trusted_issuers:
     - issuer: https://keycloak.example.com/realms/myrealm
       algorithms:
       - RS256
-      - ES256
       decoding_key:
         kind: jwks_url
         url: https://keycloak.example.com/realms/myrealm
@@ -43,7 +43,7 @@ translated: 4   approximated: 4   skipped: 1
 [INFO ] skipped       spec.targetRef
           Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
 [INFO ] translated    authentication/keycloak-jwt
-          JWT → identity/jwt (algorithms pinned to RS256/ES256 by default; supply explicit algorithms upstream if narrower).
+          JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).
 [WARN ] approximated  authentication/keycloak-jwt
           issuerUrl maps to OIDC discovery, which CPEX identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.
 [INFO ] translated    authorization/members-can-read

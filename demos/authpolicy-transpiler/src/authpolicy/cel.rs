@@ -5,11 +5,19 @@
 //!
 //! Kuadrant predicates reference an Envoy/Authorino attribute vocabulary
 //! (`auth.identity.*`, `request.method/path/host`, `request.headers[...]`)
-//! that does not exist verbatim in CPEX's evaluation bag. CPEX surfaces
-//! identity claims as `claim.*` and the HTTP request line/headers on the
-//! `HttpExtension` as `http.method` / `http.path` / `http.host` /
-//! `http.request_headers.*` (the latter populated by the Praxis filter in
-//! Phase B).
+//! that does not exist verbatim in CPEX's evaluation bag. CPEX surfaces the
+//! HTTP request line/headers on the `HttpExtension` as `http.method` /
+//! `http.path` / `http.host` / `http.request_headers.*`.
+//!
+//! Identity is special. CPEX's `standard` claim mapper does not surface a raw
+//! `claim.*` bag; it maps `roles` / `permissions` / `groups`|`teams` into
+//! per-name booleans exposed to CEL as `role.<name>` / `perm.<name>` /
+//! `team.<name>`. So the common Kuadrant RBAC idiom `'<value>' in
+//! auth.identity.roles` is rewritten to the guarded boolean form
+//! `(has(role.<value>) && role.<value>)` rather than a (never-populated)
+//! `claim.roles` array test. Non-RBAC identity references fall back to the
+//! lexical `auth.identity.* → claim.*` rewrite and remain a documented
+//! runtime gap wherever `claim.*` is unpopulated.
 //!
 //! This module rewrites the recognized prefixes to their CPEX equivalents
 //! and then scans for any *un-remapped* reference into a source namespace
@@ -57,7 +65,13 @@ pub(crate) fn remap(expr: &str) -> Remap {
     // `request.headers.X` → `http.request_headers.<lowercased>`.
     out = rewrite_headers(&out);
 
-    // Identity claims: `auth.identity.<rest>` → `claim.<rest>`.
+    // RBAC membership idiom: `'<value>' in auth.identity.{roles|permissions|
+    // groups|teams}` → `(has(<ns>.<value>) && <ns>.<value>)`, since CPEX
+    // exposes these as per-name booleans, not arrays. Runs before the generic
+    // identity rewrite below so the membership forms are consumed first.
+    out = rewrite_membership(&out);
+
+    // Remaining identity references: `auth.identity.<rest>` → `claim.<rest>`.
     out = out.replace("auth.identity.", "claim.");
 
     // Anything still pointing at a source namespace could not be mapped.
@@ -90,6 +104,76 @@ fn rewrite_headers(expr: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Rewrite the Kuadrant RBAC membership idiom
+/// `'<value>' in auth.identity.{roles|permissions|groups|teams}` into CPEX's
+/// guarded boolean form `(has(<ns>.<value>) && <ns>.<value>)`. CPEX's standard
+/// claim mapper surfaces these claims as per-name booleans (`role.hr`,
+/// `perm.view_ssn`, `team.engineering`), not as arrays, so an array-membership
+/// test would never match. Non-membership references are left untouched for
+/// the generic `auth.identity.* → claim.*` pass.
+fn rewrite_membership(expr: &str) -> String {
+    let mut out = String::with_capacity(expr.len());
+    let mut rest = expr;
+    while let Some(q) = rest.find('\'') {
+        out.push_str(&rest[..q]);
+        let after_open = &rest[q + 1..];
+        let Some(qc) = after_open.find('\'') else {
+            // Unterminated quote — emit the rest verbatim and stop scanning.
+            out.push_str(&rest[q..]);
+            return out;
+        };
+        let literal = &after_open[..qc];
+        let tail = &after_open[qc + 1..];
+        if let Some((replacement, consumed)) = membership_replacement(literal, tail) {
+            out.push_str(&replacement);
+            rest = &tail[consumed..];
+        } else {
+            // Not a membership form — emit `'literal'` unchanged.
+            out.push('\'');
+            out.push_str(literal);
+            out.push('\'');
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// If `tail` (the text immediately after a closing quote) begins with
+/// ` in auth.identity.<field>` for a known RBAC field, return the CPEX boolean
+/// replacement for `'<literal>' in auth.identity.<field>` and the number of
+/// bytes of `tail` consumed. Returns `None` for any other shape.
+fn membership_replacement(literal: &str, tail: &str) -> Option<(String, usize)> {
+    let trimmed = tail.trim_start();
+    let lead_ws = tail.len() - trimmed.len();
+    let after_in = trimmed.strip_prefix("in ")?;
+    let after_in_t = after_in.trim_start();
+    let in_ws = after_in.len() - after_in_t.len();
+    let after_ns = after_in_t.strip_prefix("auth.identity.")?;
+    let field: String = after_ns
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    let ns = match field.as_str() {
+        "roles" => "role",
+        "permissions" => "perm",
+        "groups" | "teams" => "team",
+        _ => return None,
+    };
+    // The literal must be a safe bag-key segment (no spaces/quotes/operators),
+    // otherwise leave it alone rather than emit malformed CEL.
+    if literal.is_empty()
+        || !literal
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+    {
+        return None;
+    }
+    let replacement = format!("(has({ns}.{literal}) && {ns}.{literal})");
+    let consumed = lead_ws + "in ".len() + in_ws + "auth.identity.".len() + field.len();
+    Some((replacement, consumed))
 }
 
 /// Parse a header accessor immediately following `request.headers`.
@@ -229,5 +313,48 @@ mod tests {
     fn combined_expression_maps() {
         let got = ok("request.method == 'GET' && auth.identity.email_verified");
         assert_eq!(got, "http.method == 'GET' && claim.email_verified");
+    }
+
+    #[test]
+    fn rbac_membership_maps_to_boolean_namespaces() {
+        assert_eq!(
+            ok("'hr' in auth.identity.roles"),
+            "(has(role.hr) && role.hr)"
+        );
+        assert_eq!(
+            ok("'tool_execute' in auth.identity.permissions"),
+            "(has(perm.tool_execute) && perm.tool_execute)"
+        );
+        assert_eq!(
+            ok("'engineering' in auth.identity.teams"),
+            "(has(team.engineering) && team.engineering)"
+        );
+        assert_eq!(
+            ok("'admins' in auth.identity.groups"),
+            "(has(team.admins) && team.admins)"
+        );
+    }
+
+    #[test]
+    fn membership_composes_with_http_and_other_claims() {
+        assert_eq!(
+            ok("request.method == 'POST' && 'hr' in auth.identity.roles"),
+            "http.method == 'POST' && (has(role.hr) && role.hr)"
+        );
+        // A non-RBAC identity field still falls back to the claim.* rewrite.
+        assert_eq!(
+            ok("'hr' in auth.identity.roles && auth.identity.email_verified"),
+            "(has(role.hr) && role.hr) && claim.email_verified"
+        );
+    }
+
+    #[test]
+    fn membership_only_for_known_rbac_fields() {
+        // `auth.identity.scopes` is not an RBAC field → generic claim.* rewrite,
+        // leaving a plain array membership over `claim.scopes`.
+        assert_eq!(
+            ok("'read' in auth.identity.scopes"),
+            "'read' in claim.scopes"
+        );
     }
 }

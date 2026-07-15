@@ -46,6 +46,9 @@ pub(crate) struct PluginEntry {
 /// `identity/jwt` plugin config (mirrors `JwtIdentityResolverConfig`).
 #[derive(Debug, Serialize)]
 pub(crate) struct JwtConfig {
+    /// Identity slot the claim mapper fills. `user` so the standard mapper's
+    /// `map_subject` runs and populates `role.*` / `perm.*` / `team.*`.
+    pub role: String,
     pub header: String,
     pub trusted_issuers: Vec<TrustedIssuer>,
     #[serde(skip_serializing_if = "Option::is_none")]

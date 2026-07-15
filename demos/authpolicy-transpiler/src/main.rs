@@ -218,7 +218,7 @@ mod golden_tests {
 
     use crate::authpolicy::{model, translate};
 
-    const FIXTURES: [&str; 3] = ["jwt-rbac", "apikey-opa", "gateway-defaults"];
+    const FIXTURES: [&str; 4] = ["jwt-rbac", "apikey-opa", "gateway-defaults", "jwt-cel-http"];
 
     fn fixture_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/authpolicy")
@@ -352,6 +352,33 @@ mod golden_tests {
                 .entries
                 .iter()
                 .any(|e| e.construct.starts_with("callbacks/"))
+        );
+
+        // jwt-cel-http: the clean end-to-end example. JWT (via jwksUrl) + CEL
+        // authz over top-level claims and http.* translate with zero
+        // approximation and no fail-closed; the only skip is the inherent
+        // spec.targetRef binding. This is the property the runnable demo relies
+        // on, so guard it directly (not just via the golden diff).
+        let clean = transpile_fixture("jwt-cel-http");
+        assert!(!clean.report.has_fatal(), "jwt-cel-http must not fail closed");
+        let (_translated, approximated, _skipped) = clean.report.counts();
+        assert_eq!(approximated, 0, "clean example must have zero approximated constructs");
+        assert!(clean.cpex_doc.contains("kind: identity/jwt"));
+        assert!(clean.cpex_doc.contains("role: user"), "identity plugin sets role: user");
+        assert!(clean.cpex_doc.contains("kind: cel"), "cel PDP resolver declared");
+        // RBAC membership maps to CPEX's boolean identity namespaces, not to a
+        // (never-populated) claim.* array test.
+        assert!(
+            clean.cpex_doc.contains("has(role.hr) && role.hr"),
+            "role membership → role.<name> boolean"
+        );
+        assert!(
+            clean.cpex_doc.contains("has(perm.tool_execute) && perm.tool_execute"),
+            "permission membership → perm.<name> boolean"
+        );
+        assert!(
+            !clean.cpex_doc.contains("claim."),
+            "clean example must not emit unpopulated claim.* references"
         );
     }
 }

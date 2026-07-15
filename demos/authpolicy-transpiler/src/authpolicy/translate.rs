@@ -34,9 +34,13 @@ use super::{
     report::{Report, Severity},
 };
 
-/// Conservative default algorithm pinning for JWKS-based issuers when the
-/// source `AuthPolicy` does not pin algorithms (plan R21 — never empty).
-const DEFAULT_JWT_ALGORITHMS: [&str; 2] = ["RS256", "ES256"];
+/// Default algorithm pinning for JWKS-based issuers when the source
+/// `AuthPolicy` does not pin algorithms (never empty). RS256 is the OIDC
+/// default and the algorithm virtually every IdP (Keycloak, Auth0, Okta)
+/// signs access tokens with; pinning a single algorithm avoids an
+/// `InvalidAlgorithm` rejection when the JWKS also advertises keys for other
+/// uses. Operators serving ES256 (etc.) widen this in the emitted policy.
+const DEFAULT_JWT_ALGORITHMS: [&str; 1] = ["RS256"];
 
 /// The output of transpiling one `AuthPolicy`.
 pub(crate) struct Transpiled {
@@ -234,6 +238,7 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
                     hooks: vec!["identity.resolve".to_owned()],
                     on_error: "fail".to_owned(),
                     config: JwtConfig {
+                        role: "user".to_owned(),
                         header,
                         trusted_issuers: vec![TrustedIssuer {
                             issuer,
@@ -247,7 +252,7 @@ fn translate_authn(scheme: &AuthScheme, report: &mut Report) -> Vec<PluginEntry>
 
                 report.translated(
                     &construct,
-                    "JWT → identity/jwt (algorithms pinned to RS256/ES256 by default; supply explicit algorithms upstream if narrower).",
+                    "JWT → identity/jwt (role: user; algorithms default to RS256 — widen in the emitted policy if the IdP signs with ES256/etc.).",
                 );
                 if let Some(note) = jwks_note {
                     report.approximated(&construct, Severity::Warning, note);
