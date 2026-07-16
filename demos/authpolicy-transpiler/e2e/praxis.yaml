@@ -10,7 +10,7 @@
 #   * no / invalid token → identity gate (HTTP 401)
 #
 # `config_path` points at the transpiler output written by run-demo.sh into
-# ./out. Run with `./run-demo.sh` (or `praxis -c praxis-authpolicy.yaml`
+# ./out. Run with `./run-demo.sh` (or `praxis -c praxis.yaml`
 # once ./out is populated and Keycloak is up).
 
 listeners:

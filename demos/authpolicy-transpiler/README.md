@@ -60,6 +60,39 @@ Per input policy, `--out-dir` writes `<name>-cpex-policy.yaml`, `<name>-policy-f
 
 Try the other samples to see the range: `examples/apikey-opa.yaml` (unsupported methods, fails closed) and `examples/gateway-defaults.yaml` (`defaults` block, metadata/callbacks reported as gaps).
 
+## End-to-end on Praxis + CPEX
+
+`examples/jwt-cel-http.yaml` is the "happy path": it translates cleanly (no approximations) and its output runs, unedited, as a generic-HTTP (L7) authorization policy on Praxis with the CPEX policy engine. The `e2e/` directory is a **self-contained** runner — it brings up its own Keycloak, transpiles the example, builds Praxis, and proves the CEL decisions with real persona tokens:
+
+```console
+cd e2e
+./run-demo.sh
+```
+
+That single command:
+
+1. Starts **Keycloak** (`e2e/docker-compose.yml`, realm `e2e/keycloak/realm-export.json`) and waits for OIDC discovery.
+2. Transpiles `examples/jwt-cel-http.yaml` into `e2e/out/` (CPEX policy doc + Praxis filter block).
+3. Injects a localhost-dev `insecure_http` shim into the emitted JWKS `decoding_key` (never needed with an https IdP).
+4. Builds **Praxis** from the sibling `../../../../praxis` checkout with `--features cpex-policy-engine` (`e2e/build-praxis.sh`; override with `PRAXIS_BIN` / `PRAXIS_DIR` / `PRAXIS_GIT_URL`).
+5. Starts a tiny echo backend (`:9200`) and the gateway (`:8095`, `e2e/praxis.yaml`: `policy` → `router` → `load_balancer`).
+6. Mints `alice`/`bob` tokens (`e2e/mint-token.sh`) and exercises the CEL policy.
+
+The AuthPolicy expresses two CEL rules over the HTTP request line and top-level identity claims — Kuadrant array-membership maps to CPEX's boolean identity namespaces (`role.*` / `perm.*`), which the `standard` claim mapper populates:
+
+- **reads** (`GET`) require the `tool_execute` permission — `'tool_execute' in auth.identity.permissions` → `has(perm.tool_execute) && perm.tool_execute`
+- **writes** (`POST`/`DELETE`) require the `hr` role — `'hr' in auth.identity.roles` → `has(role.hr) && role.hr`
+
+| Request | Persona | Result | Why |
+|---|---|---|---|
+| `GET /api/...`  | alice (engineer) | **200** | has `tool_execute` |
+| `GET /api/...`  | bob (hr)         | **200** | has `tool_execute` |
+| `POST /api/...` | alice (engineer) | **403** | CEL deny — not `hr` |
+| `POST /api/...` | bob (hr)         | **200** | CEL allow — `hr` |
+| `GET /api/...`  | (no token)       | **401** | identity gate |
+
+Requirements: `docker` (compose), `cargo`, `python3`, `curl`, `jq`. Keycloak binds host port `8081` and imports the `cpex-demo` realm — the same as the sibling `cpex` demo, so run only one at a time. First run is slow (Praxis release build); later runs reuse the cached binary.
+
 ## Scope and limitations
 
 The transpiler covers the subset that maps cleanly to CEL. Everything else is reported, not dropped.

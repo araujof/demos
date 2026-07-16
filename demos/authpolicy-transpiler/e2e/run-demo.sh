@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # End-to-end demo: transpile a Kuadrant AuthPolicy into a Praxis generic-HTTP
-# (L7) CEL policy, run it on Praxis + CPEX against the shared Keycloak, and
-# prove the CEL decisions with real persona tokens.
+# (L7) CEL policy, run it on Praxis + CPEX against a local Keycloak, and prove
+# the CEL decisions with real persona tokens.
 #
-# Reuses the demos/cpex harness (Keycloak, build-praxis.sh, mint-token.sh)
-# rather than duplicating it. Praxis runs on the HOST (built with the
-# cpex-policy-engine feature); only Keycloak runs in Docker.
+# Self-contained: Keycloak (docker-compose.yml), token minting (mint-token.sh),
+# and the Praxis build (build-praxis.sh) all live in this directory. Praxis
+# runs on the HOST (built with the cpex-policy-engine feature); only Keycloak
+# runs in Docker.
 #
 # Requirements: docker (compose), cargo, python3, curl, jq.
 #
@@ -13,17 +14,16 @@
 #   ./run-demo.sh
 #
 # Env passthrough to build-praxis.sh: PRAXIS_BIN / PRAXIS_DIR /
-# PRAXIS_GIT_URL+PRAXIS_GIT_REF (default: sibling ../../../praxis).
+# PRAXIS_GIT_URL+PRAXIS_GIT_REF (default: sibling ../../../../praxis).
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CPEX_DIR="../cpex"
-TRANSPILER_DIR="../authpolicy-transpiler"
+TRANSPILER_DIR=".."
 EXAMPLE_REL="examples/jwt-cel-http.yaml"
 OUT_DIR="$PWD/out"
 POLICY_DOC="$OUT_DIR/jwt-cel-http-cpex-policy.yaml"
-GATEWAY_CONFIG="praxis-authpolicy.yaml"
+GATEWAY_CONFIG="praxis.yaml"
 GATEWAY_LOG="gateway.log"
 GATEWAY_PORT=8095
 ECHO_PORT=9200
@@ -31,7 +31,7 @@ KEYCLOAK_HOST="${KEYCLOAK_HOST:-http://localhost:8081}"
 KEYCLOAK_REALM="${KEYCLOAK_REALM:-cpex-demo}"
 DISCOVERY_URL="${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration"
 
-step() { printf "\n\033[1;34m[authpolicy-http]\033[0m %s\n" "$*"; }
+step() { printf "\n\033[1;34m[authpolicy-e2e]\033[0m %s\n" "$*"; }
 ok()   { printf "  \033[1;32m✓\033[0m %s\n" "$*"; }
 info() { printf "  %s\n" "$*"; }
 die()  { printf "  \033[1;31m✗ %s\033[0m\n" "$*" >&2; exit 1; }
@@ -57,9 +57,9 @@ for tool in docker cargo python3 curl jq; do
   command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
 done
 
-# 1. Keycloak (shared with the cpex demo).
-step "starting Keycloak (docker compose, from $CPEX_DIR)"
-docker compose -f "$CPEX_DIR/docker-compose.yml" up -d keycloak >/dev/null
+# 1. Keycloak (local, self-contained).
+step "starting Keycloak (docker compose)"
+docker compose up -d keycloak >/dev/null
 printf "  waiting for OIDC discovery"
 for _ in $(seq 1 90); do
   if curl -sf "$DISCOVERY_URL" >/dev/null 2>&1; then break; fi
@@ -95,7 +95,7 @@ fi
 
 # 4. Build Praxis (host binary, cpex-policy-engine feature).
 step "building/resolving the Praxis binary"
-GATEWAY_BIN="${GATEWAY_BIN:-$("$CPEX_DIR/build-praxis.sh")}"
+GATEWAY_BIN="${GATEWAY_BIN:-$(./build-praxis.sh)}"
 [ -x "$GATEWAY_BIN" ] || die "praxis binary not found at '$GATEWAY_BIN'"
 ok "$GATEWAY_BIN"
 
@@ -110,8 +110,8 @@ ok "gateway listening (log: $GATEWAY_LOG)"
 
 # 6. Mint persona tokens (alice=engineer, bob=hr).
 step "minting persona tokens"
-ALICE="$("$CPEX_DIR/mint-token.sh" alice)"
-BOB="$("$CPEX_DIR/mint-token.sh" bob)"
+ALICE="$(./mint-token.sh alice)"
+BOB="$(./mint-token.sh bob)"
 ok "minted alice (engineer) and bob (hr)"
 
 # 7. Exercise the CEL policy.

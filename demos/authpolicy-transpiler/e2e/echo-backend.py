@@ -5,7 +5,7 @@ Returns 200 + a small JSON blob for ANY method and path. Praxis's `policy`
 filter is what decides allow/deny — anything that reaches this backend was
 already authorized, so the backend just confirms the request got through.
 
-Listens on 127.0.0.1:9200 (matches praxis-authpolicy.yaml's cluster endpoint).
+Listens on 127.0.0.1:9200 (matches praxis.yaml's cluster endpoint).
 """
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
