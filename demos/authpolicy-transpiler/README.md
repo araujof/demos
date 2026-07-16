@@ -13,7 +13,7 @@ Use it to see how an existing Kuadrant `AuthPolicy` would look under Praxis + th
 
 ## Demo
 
-Transpiling the sample policies and reading the coverage report — clean translation, honest gaps, and the fail-closed deny-all ([watch on asciinema](https://asciinema.org/a/Swtb1ZPhv5WCdQoV)):
+Transpiling the sample policies and reading the coverage report — clean translation, honest gaps, and the fail-closed deny-all:
 
 [![AuthPolicy transpiler CLI demo](https://asciinema.org/a/Swtb1ZPhv5WCdQoV.svg)](https://asciinema.org/a/Swtb1ZPhv5WCdQoV)
 
@@ -75,7 +75,7 @@ cd e2e
 ./run-demo.sh
 ```
 
-The run transpiles the AuthPolicy, deploys the emitted CPEX policy on Praxis, and proves the CEL decisions with alice/bob tokens — showing both the original AuthPolicy and the deployed CPEX policy along the way ([watch on asciinema](https://asciinema.org/a/BeWTbAEyGrzEQvAN)):
+The run transpiles the AuthPolicy, deploys the emitted CPEX policy on Praxis, and proves the CEL decisions with alice/bob tokens — showing both the original AuthPolicy and the deployed CPEX policy along the way:
 
 [![AuthPolicy transpiler end-to-end demo](https://asciinema.org/a/BeWTbAEyGrzEQvAN.svg)](https://asciinema.org/a/BeWTbAEyGrzEQvAN)
 
