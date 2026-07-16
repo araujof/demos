@@ -11,9 +11,7 @@ Use it to see how an existing Kuadrant `AuthPolicy` would look under Praxis + th
 - A coverage report that classifies every construct, so gaps are visible rather than silently dropped.
 - Fail-closed behaviour: if a policy declares authorization but nothing translates, the output is a `require(false)` deny-all and the CLI exits non-zero.
 
-## Demo
-
-Transpiling the sample policies and reading the coverage report — clean translation, honest gaps, and the fail-closed deny-all:
+The following demo shows transpiles the sample policies and reads the coverage report:
 
 [![AuthPolicy transpiler CLI demo](https://asciinema.org/a/Swtb1ZPhv5WCdQoV.svg)](https://asciinema.org/a/Swtb1ZPhv5WCdQoV)
 
