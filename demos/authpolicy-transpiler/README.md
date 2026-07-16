@@ -11,6 +11,12 @@ Use it to see how an existing Kuadrant `AuthPolicy` would look under Praxis + th
 - A coverage report that classifies every construct, so gaps are visible rather than silently dropped.
 - Fail-closed behaviour: if a policy declares authorization but nothing translates, the output is a `require(false)` deny-all and the CLI exits non-zero.
 
+## Demo
+
+Transpiling the sample policies and reading the coverage report — clean translation, honest gaps, and the fail-closed deny-all ([watch on asciinema](https://asciinema.org/a/Swtb1ZPhv5WCdQoV)):
+
+[![AuthPolicy transpiler CLI demo](https://asciinema.org/a/Swtb1ZPhv5WCdQoV.svg)](https://asciinema.org/a/Swtb1ZPhv5WCdQoV)
+
 ## Quick start
 
 ```console
@@ -68,6 +74,10 @@ Try the other samples to see the range: `examples/apikey-opa.yaml` (unsupported 
 cd e2e
 ./run-demo.sh
 ```
+
+The run transpiles the AuthPolicy, deploys the emitted CPEX policy on Praxis, and proves the CEL decisions with alice/bob tokens — showing both the original AuthPolicy and the deployed CPEX policy along the way ([watch on asciinema](https://asciinema.org/a/BeWTbAEyGrzEQvAN)):
+
+[![AuthPolicy transpiler end-to-end demo](https://asciinema.org/a/BeWTbAEyGrzEQvAN.svg)](https://asciinema.org/a/BeWTbAEyGrzEQvAN)
 
 That single command:
 
