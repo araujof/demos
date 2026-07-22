@@ -1,0 +1,65 @@
+# File Resolve + Document Extraction
+#
+# Demonstrates the `openai_file_resolve` and `openai_doc_extract`
+# filters working together to resolve file references and convert
+# document content to text for vLLM.
+#
+# Pipeline:
+#   1. openai_responses_format — classify the request
+#   2. openai_responses_validate — validate parameters
+#   3. openai_file_resolve — resolve file_id → inline file_data
+#      by calling the OGX Files API
+#   4. openai_doc_extract — convert input_file → input_text for
+#      text-safe content (text/*, application/json, application/xml)
+#   5. openai_responses_proxy — rebuild the outbound body
+#   6. router + load_balancer — forward to vLLM
+#
+# Build:
+#   cargo build -p praxis-ai-proxy --release
+
+listeners:
+  - name: ai-gateway
+    address: "127.0.0.1:8080"
+    filter_chains: [file-resolve-pipeline]
+
+filter_chains:
+  - name: file-resolve-pipeline
+    filters:
+      - filter: openai_responses_format
+        on_invalid: continue
+        headers:
+          format: x-praxis-ai-format
+          model: x-praxis-ai-model
+          stream: x-praxis-ai-stream
+          mode: x-praxis-responses-mode
+
+      - filter: openai_responses_validate
+
+      - filter: openai_file_resolve
+        files_api_url: "http://127.0.0.1:8321"
+        allow_private_files_api_url: true
+        allow_pre_security_callout: true
+        forward_headers:
+          - authorization
+        on_missing: reject
+        timeout_ms: 10000
+
+      - filter: openai_doc_extract
+        allow_pre_security_callout: true
+        on_unsupported: continue
+
+      - filter: openai_responses_proxy
+        name: inference
+
+      - filter: router
+        routes:
+          - path: "/v1/responses"
+            headers:
+              x-praxis-ai-format: "openai_responses"
+            cluster: "vllm"
+
+      - filter: load_balancer
+        clusters:
+          - name: "vllm"
+            endpoints:
+              - "127.0.0.1:8000"

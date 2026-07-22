@@ -1,0 +1,24 @@
+Praxis Reverse Proxy — Architecture Overview
+
+Praxis is a high-performance, programmable reverse proxy built in Rust
+on top of the Pingora framework. It provides a composable filter pipeline
+that operators can customize for AI inference workloads.
+
+Key Features:
+- Composable filter pipeline with hot-reload support
+- OpenAI Responses API compatibility with conversation management
+- Multi-provider support (OpenAI, Anthropic, vLLM, llm-d)
+- Token usage tracking and header injection
+- Streaming SSE event accumulation and persistence
+- File resolution and document extraction for inference backends
+- MCP protocol brokering for agentic workflows
+- NeMo Guardrails integration for content safety
+
+The filter architecture follows a classify-route-branch pattern:
+classifier filters promote facts to internal headers, and the router
+matches those headers to select backend clusters. Filters can inspect
+and modify requests and responses at multiple phases (headers, body,
+streaming chunks).
+
+Praxis supports dynamic configuration reload — filter pipelines are
+swapped at runtime without restarting the proxy process.
