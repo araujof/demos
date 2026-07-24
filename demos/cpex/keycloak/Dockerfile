@@ -13,6 +13,13 @@ RUN mvn -q -e -B clean package
 # Stage 2 — Keycloak with the SPI dropped into providers/. `start-dev`
 # (see docker-compose) rebuilds on start and picks it up under the id
 # `http-authentication-channel`.
-FROM quay.io/keycloak/keycloak:26.2
+#
+# 26.6.x for the native SPIFFE identity provider (providerId: spiffe,
+# feature spiffe:v1, added 26.4). The generic OIDC broker can't validate a
+# JWT-SVID in a token exchange — it falls back to the (nonexistent) UserInfo
+# endpoint — so the native SPIFFE provider is required. The CIBA SPI is
+# compiled against keycloak.version 26.0.0 with `provided` scope against a
+# stable SPI, so it loads unchanged across the 26.x line.
+FROM quay.io/keycloak/keycloak:26.6.1
 COPY --from=spi-build /build/target/keycloak-ciba-http-channel.jar \
      /opt/keycloak/providers/keycloak-ciba-http-channel.jar
